@@ -28,15 +28,15 @@ join (select distinct
     merch_yr_wk,
     fin_yr_pd
 
-from "RI_NGBI_DB"."PUBLISHED_DATA"."DIM_TIME") dmt
+from "RI_NGBI_DB"."PUBLISHED_DATA"."DIM_TIME") dmt -- Stockloss view is at week level therefore to join to the calendar table, I need to make a subquery to also get it at a unique week level there cross joins are avoided
 on dmt.merch_yr_wk = wslv.merch_yr_wk
 
 join "RI_SANDL_DB"."RAW_DATA"."LU_LOCATION_ID_RRM_CLOSED" rrmc
 on rrmc.storenumber = wslv.location_id
 
-where wslv.dept_id not in (132,230,517)
+where wslv.dept_id not in (132,230,517) -- Excluding DCK departments
  
-and rrmc.closed is null 
+and rrmc.closed is null -- I only want stores which are currently open
 and dmt.fin_yr_pd between 202311 and 202313
 
 
@@ -65,7 +65,7 @@ select distinct
 from "RI_NGBI_DB"."PUBLISHED_DATA"."DIM_TIME"
 
 where fin_yr IN (2023,2024)
-and cal_dt <= current_date() - 7
+and cal_dt <= current_date() - 7 --This code is run the week after the period ends hence using the current_date() function and subtracting 7 to get everything up to last week
 
 group by 
     merch_yr_wk,
@@ -75,12 +75,14 @@ having right((select max(merch_yr_wk) last_week
         
         from "RI_NGBI_DB"."PUBLISHED_DATA"."DIM_TIME" 
         
-        where cal_dt <= current_date() - 7),2) >= max(right(merch_yr_wk,2)) 
+        where cal_dt <= current_date() - 7),2) >= max(right(merch_yr_wk,2)) -- This sub query within the having clause gets the comparative weeks for the previous year. This ensures year on year analysis is for the same
+									    -- number of weeks
 
 order by merch_yr_wk
 ),
 
 -- Creating a CTE with all the store information
+-- Rather than constantly writing case when statements, just have one CTE with all the store properties and join them in where needed in the subsequent CTEs. 
 
 locations as (
 
@@ -130,13 +132,13 @@ select
     dmo.SCO_Flag, 
     dmo.ICP_Status,
     dmo.Tagging_Status,
-    case when WSLV.dept_id in (701,702,703,710,114,597,697,116,598,110,305,698,121,203,224) then 'Womenswear' else dpd.div_descr end  div_descr, 
-    CASE WHEN WSLV.dept_id in (701,702,703) then 710 --Moving departments aound and regrouping per request
+    case when WSLV.dept_id in (701,702,703,710,114,597,697,116,598,110,305,698,121,203,224) then 'Womenswear' else dpd.div_descr end  div_descr, -- Finance have requested that certain departments are 
+    CASE WHEN WSLV.dept_id in (701,702,703) then 710 --Moving departments aound and regrouping per request				         -- allocated to WW division
          when WSLV.dept_id in (114,597,697,116,598,110,305,698,121,203,224) then 1000 else wslv.dept_id end                           dept_id,
     CASE WHEN WSLV.dept_id in (114,597,697,116,598,110,305,698,121,203,224) then 'OTHER' 
          WHEN WSLV.dept_id in (701,702,703) then 'WW RI Beauty' else dpd.dept_descr end                                               dept_descr,
-    'FP'                                                                                                                              FP_MD,
-    sum(case when left(wslv.merch_yr_wk,4) = 2024 then wslv.loss_cost_gbp_fp_exjob else 0 end)                                        TY_LOSS,
+    'FP'                                                                                                                              FP_MD, --This is for the union later. Just a column so that a user can switch between 
+    sum(case when left(wslv.merch_yr_wk,4) = 2024 then wslv.loss_cost_gbp_fp_exjob else 0 end)                                        TY_LOSS, -- full price (FP) and Markdown (MD) 
     sum(case when left(wslv.merch_yr_wk,4) = 2024 and wslv.loss_cost_gbp_fp_exjob < 0 then wslv.loss_cost_gbp_fp_exjob else 0 end)    TY_LOSS_SHORTAGE,
     sum(case when left(wslv.merch_yr_wk,4) = 2024 and wslv.loss_cost_gbp_fp_exjob > 0 then wslv.loss_cost_gbp_fp_exjob else 0 end)    TY_LOSS_SURPLUS,
     sum(case when left(wslv.merch_yr_wk,4) = 2023 then wslv.loss_cost_gbp_fp_exjob else 0 end)                                        LY_LOSS,
@@ -148,8 +150,8 @@ select
     iff(TY_SALES = 0,0,TY_LOSS/TY_SALES)                                                                                              TY_LOSS_PCT_SALES,
     iff(LY_SALES = 0,0,LY_LOSS/LY_SALES)                                                                                              LY_LOSS_PCT_SALES,
     TY_LOSS_PCT_SALES - LY_LOSS_PCT_SALES                                                                                             CHANGE_IN_LOSS_PCT_SALES,
-    sum(case when left(wslv.merch_yr_wk,4) = 2024 then wslv.loss_units_fp else 0 end)                                                 TY_LOSS_UNITS,
-    sum(case when left(wslv.merch_yr_wk,4) = 2024 and wslv.loss_units_fp < 0 then wslv.loss_units_fp else 0 end)                      TY_LOSS_SHORTAGE_units,
+    sum(case when left(wslv.merch_yr_wk,4) = 2024 then wslv.loss_units_fp else 0 end)                                                 TY_LOSS_UNITS, --I would use year(current_date()) here but this will cause problems for
+    sum(case when left(wslv.merch_yr_wk,4) = 2024 and wslv.loss_units_fp < 0 then wslv.loss_units_fp else 0 end)                      TY_LOSS_SHORTAGE_units, --end of year reporting
     sum(case when left(wslv.merch_yr_wk,4) = 2024 and wslv.loss_units_fp > 0 then wslv.loss_units_fp else 0 end)                      TY_LOSS_SURPLUS_units,
     sum(case when left(wslv.merch_yr_wk,4) = 2023 then wslv.loss_units_fp else 0 end)                                                 LY_LOSS_UNITS,
     sum(case when left(wslv.merch_yr_wk,4) = 2023 and wslv.loss_units_fp < 0 then wslv.loss_units_fp else 0 end)                      LY_LOSS_SHORTAGE_units,
@@ -197,6 +199,7 @@ order by
 ),
 
 -- MARK DOWN COMPONENT
+--Doing the same as above but for MD.
 
 markdown as (
 
@@ -416,6 +419,7 @@ group by
     FP_MD
 
 having 
+--This is to exclude departments that have no sales or cost associated with them. 
 
 (case when TY_TOTAL_LOSS = 0 and LY_TOTAL_LOSS = 0 and TY_TOTAL_LOSS_UNITS = 0 and LY_TOTAL_LOSS_UNITS = 0 
        and TY_TOTAL_SALES = 0 and LY_TOTAL_SALES = 0 and TY_TOTAL_SALES_UNITS = 0 and LY_TOTAL_SALES_UNITS = 0 then 1 else 0 end) = 0
@@ -430,7 +434,7 @@ order by
 ;
 -- ===========================================================================================================================================================================================
 -- ===========================================================================================================================================================================================
--- From the view above, create a table
+-- From the view above, create a table - This table is what the dashboard pulls the data from. 
 -- ===========================================================================================================================================================================================
 -- ===========================================================================================================================================================================================
 
@@ -444,7 +448,7 @@ from RI_SANDL_DB.RAW_DATA.POWER_BI_STOCKTAKE_LOSS_VW
 
 -- ===========================================================================================================================================================================================
 -- ===========================================================================================================================================================================================
--- INCIDENTS
+-- INCIDENTS : The second half of the dashboard. 
 -- ===========================================================================================================================================================================================
 -- ===========================================================================================================================================================================================
 
@@ -532,7 +536,7 @@ GROUP BY
  
 );
 
--- Now Creating the table from the view
+-- Now Creating the table from the view so that the dashboard gets these values. 
 
 create or replace table RI_SANDL_DB.PUBLISHED_DATA.POWER_BI_INCIDENTS as (
 
